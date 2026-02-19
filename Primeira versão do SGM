@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="pt-pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SGM - Rebobinadeiras (v2.1)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        .status-pill { @apply px-2 py-1 rounded-full text-[10px] font-black uppercase; }
+        .bg-ok { @apply bg-green-100 text-green-700; }
+        .bg-warning { @apply bg-yellow-100 text-yellow-700; }
+        .bg-danger { @apply bg-red-100 text-red-700; }
+        
+        .modal-animate { animation: fadeIn 0.2s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        /* Animação de Alerta Persistente */
+        @keyframes pulse-emergency {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); background-color: #fef2f2; }
+            50% { box-shadow: 0 0 20px 10px rgba(239, 68, 68, 0); background-color: #fee2e2; }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); background-color: #fef2f2; }
+        }
+        .emergency-active { animation: pulse-emergency 2s infinite; }
+        
+        @keyframes flash-red {
+            0%, 100% { opacity: 0; }
+            50% { opacity: 0.1; }
+        }
+        .screen-flash { 
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            background: red; pointer-events: none; z-index: 9999; 
+            animation: flash-red 1s infinite; display: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans">
+
+    <!-- Overlay de Alerta Visual -->
+    <div id="visual-alert" class="screen-flash"></div>
+
+    <!-- Navegação -->
+    <nav class="bg-slate-900 text-white p-4 shadow-xl sticky top-0 z-50">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-black flex items-center gap-2 tracking-tighter">
+                <i data-lucide="settings" class="text-blue-500"></i> SGM <span class="text-blue-500">PRO</span>
+            </h1>
+            <div class="flex gap-6 text-sm font-bold uppercase tracking-widest">
+                <button onclick="showSection('assets')" class="hover:text-blue-400 transition">Ativos</button>
+                <button onclick="showSection('tasks')" class="hover:text-blue-400 transition">Painel OS</button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container mx-auto p-4 md:p-8">
+        
+        <!-- BANNER DE EMERGÊNCIA ATIVA -->
+        <div id="critical-banner" class="hidden mb-8 bg-red-600 text-white p-6 rounded-[2rem] shadow-2xl flex flex-col md:flex-row justify-between items-center gap-4 animate-bounce">
+            <div class="flex items-center gap-4">
+                <div class="bg-white text-red-600 p-3 rounded-full">
+                    <i data-lucide="alert-octagon" class="w-8 h-8"></i>
+                </div>
+                <div>
+                    <h2 class="text-xl font-black uppercase tracking-tighter">Atenção: Paragem Crítica Detetada!</h2>
+                    <p class="text-red-100 text-sm font-bold">Existe uma ordem de serviço pendente que requer atendimento imediato.</p>
+                </div>
+            </div>
+            <button onclick="showSection('tasks')" class="bg-white text-red-600 px-8 py-3 rounded-2xl font-black uppercase text-sm hover:bg-red-50 transition-colors">
+                Ir para o Painel
+            </button>
+        </div>
+
+        <!-- SECÇÃO: ATIVOS -->
+        <section id="section-assets">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+                <div>
+                    <h2 class="text-3xl font-black text-slate-800">Inventário Industrial</h2>
+                    <p class="text-gray-500 text-sm">Gerencie equipamentos e checklists de inspeção.</p>
+                </div>
+                <button onclick="openModal('assetModal')" class="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all">
+                    <i data-lucide="plus-circle"></i> Novo Equipamento
+                </button>
+            </div>
+            
+            <div id="asset-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                <!-- Ativos gerados via JS -->
+            </div>
+        </section>
+
+        <!-- SECÇÃO: ORDENS DE SERVIÇO -->
+        <section id="section-tasks" class="hidden">
+            <div class="flex justify-between items-center mb-8">
+                <h2 class="text-3xl font-black text-slate-800">Ordens de Serviço</h2>
+                <div class="flex gap-2">
+                    <span class="bg-red-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest hidden" id="emergency-badge">Urgência Máxima</span>
+                    <span class="bg-slate-100 text-slate-600 px-3 py-1 rounded-lg text-xs font-bold self-center" id="pending-count">0 Registos</span>
+                </div>
+            </div>
+            
+            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead class="bg-slate-50 border-b border-gray-100">
+                        <tr>
+                            <th class="p-5 text-xs font-bold text-gray-400 uppercase">Equipamento</th>
+                            <th class="p-5 text-xs font-bold text-gray-400 uppercase">Tipo / Alerta</th>
+                            <th class="p-5 text-xs font-bold text-gray-400 uppercase">Técnico Responsável</th>
+                            <th class="p-5 text-xs font-bold text-gray-400 uppercase">Estado</th>
+                            <th class="p-5 text-xs font-bold text-gray-400 uppercase text-right">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="os-list" class="divide-y divide-gray-50">
+                        <!-- OS geradas via JS -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- MODAL: CHECKLIST -->
+    <div id="checklistModal" class="fixed inset-0 bg-slate-900/60 hidden flex items-center justify-center p-4 z-[60] modal-animate">
+        <div class="bg-white p-8 rounded-3xl w-full max-w-lg shadow-2xl">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-xl font-black" id="checklistTitle">Itens de Inspeção</h3>
+                <button onclick="closeModal('checklistModal')" class="text-gray-400 hover:text-gray-600"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="mb-6">
+                <div class="flex gap-2 mb-4">
+                    <input type="text" id="newCheckItem" placeholder="Novo item (ex: Nível de óleo)" class="flex-1 border-gray-200 border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
+                    <button onclick="addCheckItem()" class="bg-slate-800 text-white px-4 rounded-xl hover:bg-black"><i data-lucide="plus"></i></button>
+                </div>
+                <div id="check-items-list" class="space-y-2 max-h-60 overflow-y-auto pr-2">
+                    <!-- Itens via JS -->
+                </div>
+            </div>
+            <button onclick="closeModal('checklistModal')" class="w-full bg-gray-100 py-3 rounded-xl font-bold text-gray-600">Concluído</button>
+        </div>
+    </div>
+
+    <!-- MODAL: ACEITAR CORRETIVA -->
+    <div id="acceptModal" class="fixed inset-0 bg-red-900/60 hidden flex items-center justify-center p-4 z-[70] modal-animate">
+        <div class="bg-white p-8 rounded-3xl w-full max-w-sm shadow-2xl border-t-8 border-red-600">
+            <h3 class="text-xl font-black text-red-600 mb-2 uppercase tracking-tighter">🚨 Assumir Atendimento</h3>
+            <p class="text-sm text-gray-500 mb-6 font-medium">O tempo de resposta está a ser contabilizado. Identifique-se para parar o alerta.</p>
+            <input type="text" id="mechanicName" placeholder="Nome do Técnico" class="w-full border-gray-200 border p-4 rounded-2xl outline-none focus:ring-2 focus:ring-red-500 mb-4 font-bold text-lg">
+            <div class="flex gap-2">
+                <button onclick="closeModal('acceptModal')" class="flex-1 py-3 text-gray-400 font-bold">Voltar</button>
+                <button onclick="confirmAccept()" class="flex-1 bg-red-600 text-white py-3 rounded-2xl font-bold hover:bg-red-700 shadow-lg shadow-red-200 uppercase text-xs">Confirmar Atendimento</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: NOVO ATIVO -->
+    <div id="assetModal" class="fixed inset-0 bg-slate-900/60 hidden flex items-center justify-center p-4 z-50 modal-animate">
+        <div class="bg-white p-8 rounded-3xl w-full max-w-md">
+            <h3 class="text-2xl font-black mb-6 tracking-tighter">Registar Equipamento</h3>
+            <form id="assetForm" class="space-y-4">
+                <div>
+                    <label class="text-xs font-bold text-gray-400 uppercase ml-1">Tag do Equipamento</label>
+                    <input type="text" id="assetName" placeholder="Ex: RB-01" class="w-full border-gray-100 border-2 p-4 rounded-2xl outline-none focus:border-blue-500 transition-all font-bold" required>
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-gray-400 uppercase ml-1">Modelo / Fabricante</label>
+                    <input type="text" id="assetModel" placeholder="Ex: Slitter 2000" class="w-full border-gray-100 border-2 p-4 rounded-2xl outline-none focus:border-blue-500 transition-all font-bold">
+                </div>
+                <div class="flex justify-end gap-3 mt-8">
+                    <button type="button" onclick="closeModal('assetModal')" class="px-6 py-3 text-gray-400 font-bold">Cancelar</button>
+                    <button type="submit" class="bg-blue-600 text-white px-8 py-3 rounded-2xl font-bold shadow-lg shadow-blue-100">Guardar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    
+    <script>
+        // Inicializar ícones
+        lucide.createIcons();
+
+        /*****************************************************************
+         * SGM PRO (Supabase Online + Realtime)
+         *
+         * ✅ Como usar:
+         * 1) No Supabase, crie as tabelas com o SQL (veja mensagem do ChatGPT)
+         * 2) Cole aqui as credenciais do projeto:
+         *****************************************************************/
+        const SUPABASE_URL = "https://lrglbzaflnllgpzijpbi.supabase.co";
+        const SUPABASE_ANON_KEY = "sb_publishable_SJ8voXTDn7wIYMzW8mw18A_D-adMeMe";
+
+        // Segurança básica: se não configurar, o sistema abre em modo local (somente demo)
+        const IS_SUPABASE_CONFIGURED = SUPABASE_URL.startsWith("http") && SUPABASE_ANON_KEY.length > 30;
+
+        const sb = IS_SUPABASE_CONFIGURED ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+
+        // Estado do Sistema (online)
+        let state = {
+            assets: [],
+            orders: [],
+            currentAssetId: null,
+            currentOSId: null
+        };
+
+        // ===== UI Navegação =====
+        function showSection(id) {
+            document.getElementById('section-assets').classList.add('hidden');
+            document.getElementById('section-tasks').classList.add('hidden');
+            document.getElementById('section-' + id).classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        // ===== Emergência UI =====
+        function updateEmergencyUI() {
+            const hasEmergency = state.orders.some(o => o.status === 'EMERGÊNCIA');
+            const banner = document.getElementById('critical-banner');
+            const visualAlert = document.getElementById('visual-alert');
+            const badge = document.getElementById('emergency-badge');
+
+            if (hasEmergency) {
+                banner.classList.remove('hidden');
+                visualAlert.style.display = 'block';
+                badge.classList.remove('hidden');
+            } else {
+                banner.classList.add('hidden');
+                visualAlert.style.display = 'none';
+                badge.classList.add('hidden');
+            }
+        }
+
+        // ===== Modais =====
+        function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+        // ===== Render: Ativos =====
+        function renderAssets() {
+            const container = document.getElementById('asset-list');
+            container.innerHTML = state.assets.map(asset => `
+                <div class="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-100 hover:shadow-xl transition-all group relative">
+                    <div class="flex justify-between items-start mb-6">
+                        <div class="p-4 bg-blue-50 text-blue-600 rounded-2xl group-hover:scale-110 transition-transform">
+                            <i data-lucide="cpu" class="w-6 h-6"></i>
+                        </div>
+                        <span class="status-pill ${asset.status === 'Operacional' ? 'bg-ok' : 'bg-danger'}">${asset.status}</span>
+                    </div>
+                    <h3 class="text-2xl font-black text-slate-800 mb-1">${asset.name}</h3>
+                    <p class="text-gray-400 text-xs font-bold uppercase tracking-widest mb-6">${asset.model}</p>
+
+                    <div class="space-y-3 mb-8">
+                        <div class="flex items-center gap-2 text-xs font-black text-slate-400 uppercase">
+                            <i data-lucide="clipboard-check" class="w-3 h-3 text-blue-500"></i> Inspeção Checklist
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            ${asset.checklist.length > 0 ?
+                                asset.checklist.slice(0, 3).map(c => `<span class="bg-gray-100 text-[9px] px-2 py-1 rounded-md text-gray-500 font-bold">${escapeHtml(c)}</span>`).join('') :
+                                '<span class="text-[9px] text-gray-300 italic">Nenhum item definido</span>'
+                            }
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 pt-6 border-t border-dashed">
+                        <button onclick="openChecklist(${asset.id})" class="text-[10px] font-black uppercase text-slate-400 hover:text-blue-600 flex items-center justify-center gap-2">
+                             Editar Checklist
+                        </button>
+                        <button onclick="triggerEmergency('${escapeAttr(asset.name)}')" class="bg-red-600 text-white py-3 rounded-2xl text-[10px] font-black uppercase hover:bg-red-700 transition-all shadow-lg shadow-red-100">
+                             ⚠️ Alerta Urgente
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        // ===== Render: OS =====
+        function getElapsedTime(openedAtISO) {
+            const ts = Date.parse(openedAtISO);
+            if (Number.isNaN(ts)) return "";
+            const diff = Math.floor((Date.now() - ts) / 60000); // minutos
+            if (diff < 1) return "Agora mesmo";
+            return `${diff} min atrás`;
+        }
+
+        function fmtTime(iso) {
+            const d = new Date(iso);
+            if (Number.isNaN(d.getTime())) return "";
+            return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function renderOS() {
+            const container = document.getElementById('os-list');
+            const pendingEl = document.getElementById('pending-count');
+            pendingEl.innerText = `${state.orders.length} Registos Totais`;
+
+            if (state.orders.length === 0) {
+                container.innerHTML = `<tr><td colspan="5" class="p-12 text-center text-gray-300 font-bold uppercase text-xs tracking-widest">Sem movimentações recentes</td></tr>`;
+                return;
+            }
+
+            container.innerHTML = state.orders.map(os => `
+                <tr class="transition-colors ${os.status === 'EMERGÊNCIA' ? 'emergency-active' : 'hover:bg-gray-50/50'}">
+                    <td class="p-5">
+                        <div class="font-black text-slate-700">${escapeHtml(os.asset)}</div>
+                        <div class="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">Ref: #${String(os.id).padStart(4,'0').slice(-4)}</div>
+                    </td>
+                    <td class="p-5">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full ${os.type === 'Corretiva' ? 'bg-red-500' : 'bg-blue-500'}"></span>
+                            <span class="text-xs font-bold ${os.type === 'Corretiva' ? 'text-red-600' : 'text-blue-600'}">${escapeHtml(os.type)}</span>
+                        </div>
+                        <div class="text-[10px] text-gray-500 font-bold uppercase">
+                            ${os.status === 'EMERGÊNCIA' ? getElapsedTime(os.opened_at) : 'Lançado às ' + fmtTime(os.opened_at)}
+                        </div>
+                    </td>
+                    <td class="p-5">
+                        ${os.mechanic ?
+                            `<div class="flex items-center gap-2">
+                                <div class="w-7 h-7 bg-blue-600 rounded-full flex items-center justify-center text-[10px] font-black text-white">${escapeHtml(os.mechanic.charAt(0))}</div>
+                                <div>
+                                    <div class="text-xs font-black text-slate-700">${escapeHtml(os.mechanic)}</div>
+                                    <div class="text-[9px] text-green-500 font-bold uppercase">Aceitou às ${os.accepted_at ? fmtTime(os.accepted_at) : ''}</div>
+                                </div>
+                            </div>` :
+                            `<span class="text-[10px] font-black text-red-500 uppercase animate-pulse">Aguardando Técnico...</span>`
+                        }
+                    </td>
+                    <td class="p-5">
+                        <span class="status-pill ${os.status === 'EMERGÊNCIA' ? 'bg-red-600 text-white' : os.status === 'Concluída' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}">
+                            ${escapeHtml(os.status)}
+                        </span>
+                    </td>
+                    <td class="p-5 text-right">
+                        ${os.status === 'EMERGÊNCIA' ?
+                            `<button onclick="openAccept(${os.id})" class="bg-red-600 text-white px-6 py-3 rounded-xl text-xs font-black uppercase hover:bg-red-700 shadow-lg shadow-red-200">Atender Agora</button>` :
+                          os.status === 'Em Curso' ?
+                            `<button onclick="finishOS(${os.id}, '${escapeAttr(os.asset)}')" class="bg-slate-800 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-black">Finalizar</button>` :
+                            `<i data-lucide="check-circle-2" class="text-green-500 w-6 h-6 ml-auto"></i>`
+                        }
+                    </td>
+                </tr>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        // ===== Checklist =====
+        function openChecklist(assetId) {
+            state.currentAssetId = assetId;
+            const asset = state.assets.find(a => a.id === assetId);
+            if (!asset) return;
+            document.getElementById('checklistTitle').innerText = `Checklist: ${asset.name}`;
+            renderCheckItems();
+            openModal('checklistModal');
+        }
+
+        function renderCheckItems() {
+            const asset = state.assets.find(a => a.id === state.currentAssetId);
+            if (!asset) return;
+            const list = document.getElementById('check-items-list');
+            list.innerHTML = asset.checklist.map((item, idx) => `
+                <div class="flex justify-between items-center bg-gray-50 p-3 rounded-xl border border-gray-100">
+                    <span class="text-sm font-bold text-gray-700">${escapeHtml(item)}</span>
+                    <button onclick="removeCheckItem(${idx})" class="text-red-400 hover:text-red-600"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                </div>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        async function addCheckItem() {
+            const input = document.getElementById('newCheckItem');
+            const val = input.value.trim();
+            if(!val) return;
+
+            const asset = state.assets.find(a => a.id === state.currentAssetId);
+            if(!asset) return;
+
+            asset.checklist.push(val);
+            input.value = '';
+            renderCheckItems();
+            renderAssets();
+
+            if (sb) {
+                await sb.from('assets').update({ checklist: asset.checklist }).eq('id', asset.id);
+            }
+        }
+
+        async function removeCheckItem(idx) {
+            const asset = state.assets.find(a => a.id === state.currentAssetId);
+            if(!asset) return;
+
+            asset.checklist.splice(idx, 1);
+            renderCheckItems();
+            renderAssets();
+
+            if (sb) {
+                await sb.from('assets').update({ checklist: asset.checklist }).eq('id', asset.id);
+            }
+        }
+
+        // ===== OS: abrir / aceitar / finalizar =====
+        async function triggerEmergency(assetName) {
+            if (!sb) {
+                alert("Supabase não configurado. Cole URL e ANON KEY no arquivo.");
+                return;
+            }
+
+            // 1) Criar OS
+            const { error: e1 } = await sb.from('orders').insert([{
+                asset: assetName,
+                type: 'Corretiva',
+                status: 'EMERGÊNCIA',
+                mechanic: null
+            }]);
+            if (e1) { console.error(e1); alert("Falha ao criar OS."); return; }
+
+            // 2) Atualizar status do equipamento
+            const asset = state.assets.find(a => a.name === assetName);
+            if (asset) {
+                await sb.from('assets').update({ status: 'Paragem Crítica' }).eq('id', asset.id);
+            }
+
+            showSection('tasks');
+        }
+
+        function openAccept(osId) {
+            state.currentOSId = osId;
+            openModal('acceptModal');
+            setTimeout(() => document.getElementById('mechanicName').focus(), 300);
+        }
+
+        async function confirmAccept() {
+            const name = document.getElementById('mechanicName').value.trim();
+            if(!name) return;
+
+            if (!sb) return;
+
+            const osId = state.currentOSId;
+            const { error } = await sb.from('orders')
+                .update({ mechanic: name, status: 'Em Curso', accepted_at: new Date().toISOString() })
+                .eq('id', osId);
+
+            if (error) { console.error(error); alert("Falha ao aceitar OS."); return; }
+
+            document.getElementById('mechanicName').value = '';
+            closeModal('acceptModal');
+        }
+
+        async function finishOS(id, assetName) {
+            if (!sb) return;
+
+            const { error: e1 } = await sb.from('orders')
+                .update({ status: 'Concluída', closed_at: new Date().toISOString() })
+                .eq('id', id);
+
+            if (e1) { console.error(e1); alert("Falha ao finalizar OS."); return; }
+
+            const asset = state.assets.find(a => a.name === assetName);
+            if (asset) {
+                const { error: e2 } = await sb.from('assets').update({ status: 'Operacional' }).eq('id', asset.id);
+                if (e2) console.error(e2);
+            }
+        }
+
+        // ===== Ativos: criar =====
+        document.getElementById('assetForm').onsubmit = async (e) => {
+            e.preventDefault();
+
+            const name = document.getElementById('assetName').value.toUpperCase().trim();
+            const model = document.getElementById('assetModel').value.trim() || 'Padrão';
+
+            if (!name) return;
+
+            if (!sb) {
+                alert("Supabase não configurado. Cole URL e ANON KEY no arquivo.");
+                return;
+            }
+
+            const { error } = await sb.from('assets').insert([{
+                name,
+                model,
+                status: 'Operacional',
+                checklist: []
+            }]);
+
+            if (error) { console.error(error); alert("Falha ao criar equipamento (verifique se a tag já existe)."); return; }
+
+            closeModal('assetModal');
+            e.target.reset();
+        };
+
+        // ===== Online: carregar e realtime =====
+        async function loadInitialData() {
+            if (!sb) return;
+
+            const [{ data: assets, error: aerr }, { data: orders, error: oerr }] = await Promise.all([
+                sb.from('assets').select('*').order('id', { ascending: true }),
+                sb.from('orders').select('*').order('id', { ascending: false }).limit(200)
+            ]);
+
+            if (aerr) console.error(aerr);
+            if (oerr) console.error(oerr);
+
+            state.assets = (assets || []).map(a => ({
+                id: a.id,
+                name: a.name,
+                model: a.model,
+                status: a.status,
+                checklist: Array.isArray(a.checklist) ? a.checklist : (a.checklist || [])
+            }));
+
+            state.orders = (orders || []).map(o => ({
+                id: o.id,
+                asset: o.asset,
+                type: o.type,
+                status: o.status,
+                mechanic: o.mechanic,
+                opened_at: o.opened_at,
+                accepted_at: o.accepted_at,
+                closed_at: o.closed_at
+            }));
+
+            renderAssets();
+            renderOS();
+            updateEmergencyUI();
+        }
+
+        async function reloadAssets() {
+            if (!sb) return;
+            const { data, error } = await sb.from('assets').select('*').order('id', { ascending: true });
+            if (error) { console.error(error); return; }
+            state.assets = (data || []).map(a => ({
+                id: a.id,
+                name: a.name,
+                model: a.model,
+                status: a.status,
+                checklist: Array.isArray(a.checklist) ? a.checklist : (a.checklist || [])
+            }));
+            renderAssets();
+        }
+
+        async function reloadOrders() {
+            if (!sb) return;
+            const { data, error } = await sb.from('orders').select('*').order('id', { ascending: false }).limit(200);
+            if (error) { console.error(error); return; }
+            state.orders = (data || []).map(o => ({
+                id: o.id,
+                asset: o.asset,
+                type: o.type,
+                status: o.status,
+                mechanic: o.mechanic,
+                opened_at: o.opened_at,
+                accepted_at: o.accepted_at,
+                closed_at: o.closed_at
+            }));
+            renderOS();
+            updateEmergencyUI();
+        }
+
+        function startRealtime() {
+            if (!sb) return;
+
+            const channel = sb.channel('sgm-realtime')
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' }, () => reloadAssets())
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => reloadOrders())
+                .subscribe((status) => {
+                    // opcional: console.log("Realtime:", status);
+                });
+
+            window.__sgmRealtime = channel;
+        }
+
+        // ===== Helpers: escape =====
+        function escapeHtml(str) {
+            return String(str ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#039;');
+        }
+        function escapeAttr(str) { return escapeHtml(str).replaceAll('`', '&#096;'); }
+
+        // Atualização automática do contador de tempo (só para emergências)
+        setInterval(() => {
+            if(state.orders.some(o => o.status === 'EMERGÊNCIA')) renderOS();
+        }, 30000);
+
+        window.onload = async () => {
+            // Se ainda estiverem usando localStorage no arquivo antigo:
+            // esta versão roda 100% online (Supabase). O estado local virou apenas "memória" em runtime.
+            if (!IS_SUPABASE_CONFIGURED) {
+                // fallback de demo: mantém o comportamento antigo mínimo para não ficar "tela vazia"
+                const local = JSON.parse(localStorage.getItem('sgm_v2_final') || 'null');
+                if (local?.assets) state.assets = local.assets;
+                if (local?.orders) state.orders = local.orders;
+                renderAssets(); renderOS(); updateEmergencyUI();
+                alert(`⚠️ Modo DEMO local.
+Cole SUPABASE_URL e SUPABASE_ANON_KEY no arquivo para ficar online/realtime.`);
+
+                return;
+            }
+
+            await loadInitialData();
+            startRealtime();
+        }
+    </script>
+</body>
+
+</html>
